@@ -1,0 +1,76 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+            python_arch: 'x64'
+          - os: macos-latest
+            target: mac
+            python_arch: 'x64'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: ${{ matrix.python_arch }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Create data directory
+        run: |
+          mkdir data
+          echo "пример" > data/words.txt
+        shell: bash
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: |
+          if [ "${{ matrix.target }}" = "win" ]; then
+            pyinstaller --noconfirm --clean --onefile --windowed main.py --name vk_group_parser
+          else
+            # macOS: собираем onedir, чтобы получить полноценный vk_group_parser.app
+            pyinstaller --noconfirm --clean --windowed main.py --name vk_group_parser
+          fi
+
+      - name: macOS post-processing
+        if: matrix.target == 'mac'
+        run: |
+          chmod +x dist/vk_group_parser.app/Contents/MacOS/vk_group_parser
+          # ad-hoc подпись и снятие quarantine
+          codesign --deep --force --sign - dist/vk_group_parser.app || true
+          xattr -cr dist/vk_group_parser.app || true
+
+      - name: Package artifacts (Windows)
+        if: matrix.target == 'win'
+        run: |
+          Compress-Archive -Path dist/vk_group_parser.exe -DestinationPath vk_group_parser-win.zip
+        shell: pwsh
+
+      - name: Package artifacts (macOS)
+        if: matrix.target == 'mac'
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent dist/vk_group_parser.app vk_group_parser-mac.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vk_group_parser-${{ matrix.target }}
+          path: |
+            *.zip
