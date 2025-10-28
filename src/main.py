@@ -75,7 +75,7 @@ def filters_help():
         help_text += f"{k}: {v}\n"
     help_text += "\nВАЖНО: Для получения данных по параметру filter (например, \"managers\", \"donut\", \"friends\")\n"
     help_text += "требуется админский access_token — токен владельца или администратора сообщества.\n"
-    help_text += "Иначе VK API выдаст ошибку доступа и не покажет нужный список.\n"
+    help_text += "Иначе ответ придет с ошибкой.\n"
     return help_text
 
 
