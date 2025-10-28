@@ -9,10 +9,115 @@ import aiohttp
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QLineEdit, QPushButton, QTextEdit, QFileDialog, 
-    QMessageBox, QProgressBar, QGroupBox, QCheckBox
+    QMessageBox, QProgressBar, QGroupBox, QCheckBox, QRadioButton
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 import os
+
+
+# Все доступные поля и фильтры, как на сайте VK
+FIELDS_DESCRIPTION = {
+    "bdate": "Дата рождения пользователя",
+    "can_post": "Может ли пользователь писать на стену",
+    "can_see_all_posts": "Может видеть все посты",
+    "can_see_audio": "Может видеть аудиозаписи",
+    "can_write_private_message": "Может писать личные сообщения",
+    "city": "Город пользователя",
+    "common_count": "Количество общих друзей",
+    "connections": "Информация из сторонних сервисов (Twitter, Instagram и др.)",
+    "contacts": "Контактная информация",
+    "country": "Страна пользователя",
+    "domain": "Короткий адрес страницы пользователя",
+    "education": "Образование пользователя",
+    "has_mobile": "Есть ли мобильный телефон",
+    "last_seen": "Время последнего посещения VK",
+    "lists": "Пользовательские списки",
+    "online": "В сети ли сейчас",
+    "online_mobile": "Через мобильное приложение",
+    "photo_100": "Фото пользователя 100x100 px",
+    "photo_200": "Фото пользователя 200x200 px",
+    "photo_200_orig": "Оригинальное фото 200x200 px",
+    "photo_400_orig": "Оригинальное фото 400x400 px",
+    "photo_50": "Фото пользователя 50x50 px",
+    "photo_max": "Максимальное фото пользователя",
+    "photo_max_orig": "Оригинальное максимальное фото",
+    "relation": "Семейное положение",
+    "relatives": "Родственники",
+    "schools": "Школы пользователя",
+    "sex": "Пол пользователя",
+    "site": "Персональный сайт",
+    "status": "Статус пользователя",
+    "universities": "Вузы"
+}
+
+FILTERS_DESCRIPTION = {
+    "friends": "Только друзья",
+    "unsure": "Выбрали «Возможно пойду» (мероприятия)",
+    "managers": "Руководители сообщества (требуется токен администратора)",
+    "donut": "VK Donut подписчики",
+    "unsure_friends": "Друзья с выбором «Возможно пойду»",
+    "invites": "Приглашённые пользователи (мероприятие)"
+}
+
+
+def fields_help():
+    help_text = "\nОписание всех fields (дополнительные данные):\n"
+    for k, v in FIELDS_DESCRIPTION.items():
+        help_text += f"{k}: {v}\n"
+    return help_text
+
+
+def filters_help():
+    help_text = "\nОписание всех filter (фильтры по составу):\n"
+    for k, v in FILTERS_DESCRIPTION.items():
+        help_text += f"{k}: {v}\n"
+    return help_text
+
+
+class VKGroupMembers:
+    def __init__(self, token, group_id):
+        self.token = token
+        self.group_id = group_id
+        self.members_data = []
+
+    async def get_group_members(self, count=1000, offset=0, sort=None, fields=None, filter_param=None):
+        params = {
+            'access_token': self.token,
+            'group_id': self.group_id,
+            'v': '5.131',
+            'count': count,
+            'offset': offset
+        }
+        if sort:
+            params['sort'] = sort
+        if fields:
+            params['fields'] = fields
+        if filter_param:
+            params['filter'] = filter_param
+            
+        url = "https://api.vk.com/method/groups.getMembers"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params) as r:
+                result = await r.json()
+                if "response" in result:
+                    self.members_data = result["response"]["items"]
+                    return result
+                else:
+                    raise Exception(f"Ошибка VK API: {result}")
+
+    def export_json(self, filename="group_members.json"):
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(self.members_data, f, ensure_ascii=False, indent=2)
+
+    def export_csv(self, filename="group_members.csv"):
+        df = pd.json_normalize(self.members_data)
+        df.to_csv(filename, index=False, encoding="utf-8-sig")
+
+    def print_summary(self):
+        return {
+            'total': len(self.members_data)
+        }
 
 
 class VKParser:
@@ -288,6 +393,45 @@ class VKParser:
         }
 
 
+class MembersWorker(QThread):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, token, group_id, count, offset, sort, fields, filter_param):
+        super().__init__()
+        self.token = token
+        self.group_id = group_id
+        self.count = count
+        self.offset = offset
+        self.sort = sort
+        self.fields = fields
+        self.filter_param = filter_param
+
+    def run(self):
+        try:
+            # Create asyncio event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Create members instance
+            members = VKGroupMembers(self.token, self.group_id)
+            
+            # Run fetching members
+            result = loop.run_until_complete(members.get_group_members(
+                count=self.count,
+                offset=self.offset,
+                sort=self.sort,
+                fields=self.fields,
+                filter_param=self.filter_param
+            ))
+            
+            # Emit results
+            self.finished.emit((members, result))
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class ParserWorker(QThread):
     progress = pyqtSignal(int)
     finished = pyqtSignal(object)
@@ -322,16 +466,29 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("VK Group Parser")
-        self.setGeometry(100, 100, 600, 500)
+        self.setGeometry(100, 100, 700, 600)
         
         # Create central widget and layout
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
         
+        # Create mode selection
+        mode_group = QGroupBox("Режим работы")
+        mode_layout = QHBoxLayout()
+        
+        self.parse_mode_radio = QRadioButton("Парсинг постов/комментариев")
+        self.members_mode_radio = QRadioButton("Получение участников группы")
+        self.parse_mode_radio.setChecked(True)
+        
+        mode_layout.addWidget(self.parse_mode_radio)
+        mode_layout.addWidget(self.members_mode_radio)
+        mode_group.setLayout(mode_layout)
+        main_layout.addWidget(mode_group)
+        
         # Create input group
-        input_group = QGroupBox("Параметры парсинга")
-        input_layout = QVBoxLayout()
+        self.input_group = QGroupBox("Параметры парсинга")
+        self.input_layout = QVBoxLayout()
         
         # Token input
         token_layout = QHBoxLayout()
@@ -339,31 +496,91 @@ class MainWindow(QMainWindow):
         self.token_input = QLineEdit()
         self.token_input.setEchoMode(QLineEdit.EchoMode.Password)
         token_layout.addWidget(self.token_input)
-        input_layout.addLayout(token_layout)
+        self.input_layout.addLayout(token_layout)
         
-        # Owner ID input
-        owner_layout = QHBoxLayout()
-        owner_layout.addWidget(QLabel("Owner ID:"))
+        # Owner ID input (for parsing)
+        self.owner_layout = QHBoxLayout()
+        self.owner_layout.addWidget(QLabel("Owner ID:"))
         self.owner_input = QLineEdit()
-        owner_layout.addWidget(self.owner_input)
-        input_layout.addLayout(owner_layout)
+        self.owner_layout.addWidget(self.owner_input)
+        self.input_layout.addLayout(self.owner_layout)
         
-        # Domain input
-        domain_layout = QHBoxLayout()
-        domain_layout.addWidget(QLabel("Имя группы:"))
+        # Domain input (for parsing)
+        self.domain_layout = QHBoxLayout()
+        self.domain_layout.addWidget(QLabel("Имя группы:"))
         self.domain_input = QLineEdit()
-        domain_layout.addWidget(self.domain_input)
-        input_layout.addLayout(domain_layout)
+        self.domain_layout.addWidget(self.domain_input)
+        self.input_layout.addLayout(self.domain_layout)
         
-        # Count input
-        count_layout = QHBoxLayout()
-        count_layout.addWidget(QLabel("Количество постов:"))
+        # Count input (for parsing)
+        self.count_layout = QHBoxLayout()
+        self.count_layout.addWidget(QLabel("Количество постов:"))
         self.count_input = QLineEdit("10")
-        count_layout.addWidget(self.count_input)
-        input_layout.addLayout(count_layout)
+        self.count_layout.addWidget(self.count_input)
+        self.input_layout.addLayout(self.count_layout)
         
-        input_group.setLayout(input_layout)
-        main_layout.addWidget(input_group)
+        self.input_group.setLayout(self.input_layout)
+        main_layout.addWidget(self.input_group)
+        
+        # Members parameters group
+        self.members_group = QGroupBox("Параметры получения участников")
+        self.members_layout = QVBoxLayout()
+        
+        # Group ID input (for members)
+        group_id_layout = QHBoxLayout()
+        group_id_layout.addWidget(QLabel("ID группы:"))
+        self.group_id_input = QLineEdit()
+        group_id_layout.addWidget(self.group_id_input)
+        self.members_layout.addLayout(group_id_layout)
+        
+        # Members count input
+        members_count_layout = QHBoxLayout()
+        members_count_layout.addWidget(QLabel("Количество участников:"))
+        self.members_count_input = QLineEdit("1000")
+        members_count_layout.addWidget(self.members_count_input)
+        self.members_layout.addLayout(members_count_layout)
+        
+        # Offset input
+        offset_layout = QHBoxLayout()
+        offset_layout.addWidget(QLabel("Смещение:"))
+        self.offset_input = QLineEdit("0")
+        offset_layout.addWidget(self.offset_input)
+        self.members_layout.addLayout(offset_layout)
+        
+        # Sort input
+        sort_layout = QHBoxLayout()
+        sort_layout.addWidget(QLabel("Сортировка:"))
+        self.sort_input = QLineEdit("id_asc")
+        sort_layout.addWidget(self.sort_input)
+        self.members_layout.addLayout(sort_layout)
+        
+        # Fields input
+        fields_layout = QHBoxLayout()
+        fields_layout.addWidget(QLabel("Поля (через запятую):"))
+        self.fields_input = QLineEdit()
+        fields_layout.addWidget(self.fields_input)
+        self.members_layout.addLayout(fields_layout)
+        
+        # Filter input
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Фильтр:"))
+        self.filter_input = QLineEdit()
+        filter_layout.addWidget(self.filter_input)
+        self.members_layout.addLayout(filter_layout)
+        
+        # Help buttons
+        help_layout = QHBoxLayout()
+        self.fields_help_button = QPushButton("Справка по полям")
+        self.fields_help_button.clicked.connect(self.show_fields_help)
+        self.filters_help_button = QPushButton("Справка по фильтрам")
+        self.filters_help_button.clicked.connect(self.show_filters_help)
+        help_layout.addWidget(self.fields_help_button)
+        help_layout.addWidget(self.filters_help_button)
+        self.members_layout.addLayout(help_layout)
+        
+        self.members_group.setLayout(self.members_layout)
+        self.members_group.setVisible(False)
+        main_layout.addWidget(self.members_group)
         
         # Create buttons
         buttons_layout = QHBoxLayout()
@@ -400,15 +617,42 @@ class MainWindow(QMainWindow):
         # Parser result storage
         self.parser_result = None
         
+        # Connect mode radio buttons
+        self.parse_mode_radio.toggled.connect(self.on_mode_changed)
+        self.members_mode_radio.toggled.connect(self.on_mode_changed)
+        
         # Set example values
         self.domain_input.setText("ddx_fitness")
         self.owner_input.setText("-164992662")
         self.token_input.setText("e5381dcde5381dcde5381dcd27e60409cfee538e5381dcd8dc6434edf86e231157f87ee")
+        self.group_id_input.setText("191570013")
+        
+    def on_mode_changed(self):
+        if self.parse_mode_radio.isChecked():
+            self.input_group.setVisible(True)
+            self.members_group.setVisible(False)
+        else:
+            self.input_group.setVisible(False)
+            self.members_group.setVisible(True)
+        
+    def show_fields_help(self):
+        help_text = fields_help()
+        QMessageBox.information(self, "Справка по полям", help_text)
+        
+    def show_filters_help(self):
+        help_text = filters_help()
+        QMessageBox.information(self, "Справка по фильтрам", help_text)
         
     def log_message(self, message):
         self.log_area.append(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
         
     def start_parsing(self):
+        if self.parse_mode_radio.isChecked():
+            self.start_post_parsing()
+        else:
+            self.start_members_parsing()
+            
+    def start_post_parsing(self):
         # Get input values
         domain = self.domain_input.text().strip()
         owner_id = self.owner_input.text().strip()
@@ -449,7 +693,55 @@ class MainWindow(QMainWindow):
         self.worker.error.connect(self.parsing_error)
         self.worker.start()
         
-        self.log_message("Начало парсинга...")
+        self.log_message("Начало парсинга постов/комментариев...")
+        
+    def start_members_parsing(self):
+        # Get input values
+        token = self.token_input.text().strip()
+        group_id = self.group_id_input.text().strip()
+        count = self.members_count_input.text().strip()
+        offset = self.offset_input.text().strip()
+        sort = self.sort_input.text().strip() or None
+        fields = self.fields_input.text().strip() or None
+        filter_param = self.filter_input.text().strip() or None
+        
+        # Validate inputs
+        if not group_id:
+            QMessageBox.warning(self, "Ошибка", "Введите ID группы")
+            return
+            
+        if not token:
+            QMessageBox.warning(self, "Ошибка", "Введите токен")
+            return
+            
+        try:
+            count = int(count)
+            if count <= 0:
+                raise ValueError("Count must be positive")
+        except ValueError:
+            QMessageBox.warning(self, "Ошибка", "Количество участников должно быть положительным числом")
+            return
+            
+        try:
+            offset = int(offset)
+        except ValueError:
+            QMessageBox.warning(self, "Ошибка", "Смещение должно быть числом")
+            return
+            
+        # Disable start button and reset progress
+        self.start_button.setEnabled(False)
+        self.export_button.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.log_area.clear()
+        
+        # Create and start worker thread
+        self.worker = MembersWorker(token, group_id, count, offset, sort, fields, filter_param)
+        self.worker.progress.connect(self.update_progress)
+        self.worker.finished.connect(self.members_finished)
+        self.worker.error.connect(self.parsing_error)
+        self.worker.start()
+        
+        self.log_message("Начало получения участников группы...")
         
     def update_progress(self, value):
         self.progress_bar.setValue(value)
@@ -468,11 +760,25 @@ class MainWindow(QMainWindow):
         self.log_message(f"Комментариев: {summary['comments']}")
         self.log_message(f"Ответов: {summary['replies']}")
         
+    def members_finished(self, result):
+        members, api_result = result
+        self.parser_result = members
+        self.start_button.setEnabled(True)
+        self.export_button.setEnabled(True)
+        self.progress_bar.setValue(100)
+        
+        # Show summary
+        summary = members.print_summary()
+        self.log_message(f"Получение участников завершено!")
+        self.log_message(f"Всего участников: {summary['total']}")
+        if 'response' in api_result and 'count' in api_result['response']:
+            self.log_message(f"Общее количество участников в группе: {api_result['response']['count']}")
+        
     def parsing_error(self, error_message):
         self.start_button.setEnabled(True)
         self.export_button.setEnabled(False)
         self.progress_bar.setValue(0)
-        QMessageBox.critical(self, "Ошибка", f"Произошла ошибка при парсинге:\n{error_message}")
+        QMessageBox.critical(self, "Ошибка", f"Произошла ошибка:\n{error_message}")
         self.log_message(f"Ошибка: {error_message}")
         
     def export_data(self):
@@ -486,20 +792,38 @@ class MainWindow(QMainWindow):
             return
             
         try:
-            domain = self.domain_input.text().strip()
-            filename_base = f"{domain}_data"
-            
-            # Export to JSON
-            json_path = os.path.join(directory, f"{filename_base}.json")
-            self.parser_result.export_to_json(json_path)
-            
-            # Export to CSV
-            csv_path = os.path.join(directory, f"{filename_base}.csv")
-            self.parser_result.export_to_csv(csv_path)
-            
-            self.log_message(f"Данные экспортированы в:")
-            self.log_message(f"  - {json_path}")
-            self.log_message(f"  - {csv_path}")
+            if isinstance(self.parser_result, VKParser):
+                # Export parsing results
+                domain = self.domain_input.text().strip()
+                filename_base = f"{domain}_data"
+                
+                # Export to JSON
+                json_path = os.path.join(directory, f"{filename_base}.json")
+                self.parser_result.export_to_json(json_path)
+                
+                # Export to CSV
+                csv_path = os.path.join(directory, f"{filename_base}.csv")
+                self.parser_result.export_to_csv(csv_path)
+                
+                self.log_message(f"Данные экспортированы в:")
+                self.log_message(f"  - {json_path}")
+                self.log_message(f"  - {csv_path}")
+            else:
+                # Export members results
+                group_id = self.group_id_input.text().strip() or "group"
+                filename_base = f"{group_id}_members"
+                
+                # Export to JSON
+                json_path = os.path.join(directory, f"{filename_base}.json")
+                self.parser_result.export_json(json_path)
+                
+                # Export to CSV
+                csv_path = os.path.join(directory, f"{filename_base}.csv")
+                self.parser_result.export_csv(csv_path)
+                
+                self.log_message(f"Данные экспортированы в:")
+                self.log_message(f"  - {json_path}")
+                self.log_message(f"  - {csv_path}")
             
             QMessageBox.information(self, "Успех", f"Данные успешно экспортированы в папку:\n{directory}")
         except Exception as e:
