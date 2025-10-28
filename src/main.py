@@ -9,7 +9,7 @@ import aiohttp
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QLineEdit, QPushButton, QTextEdit, QFileDialog, 
-    QMessageBox, QProgressBar, QGroupBox, QCheckBox, QRadioButton
+    QMessageBox, QProgressBar, QGroupBox, QCheckBox, QRadioButton, QTextBrowser
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 import os
@@ -61,16 +61,47 @@ FILTERS_DESCRIPTION = {
 
 
 def fields_help():
-    help_text = "\nОписание всех fields (дополнительные данные):\n"
+    help_text = "Описание всех fields (дополнительные данные):\n"
+    help_text += "=" * 50 + "\n"
     for k, v in FIELDS_DESCRIPTION.items():
         help_text += f"{k}: {v}\n"
     return help_text
 
 
 def filters_help():
-    help_text = "\nОписание всех filter (фильтры по составу):\n"
+    help_text = "Описание всех filter (фильтры по составу):\n"
+    help_text += "=" * 50 + "\n"
     for k, v in FILTERS_DESCRIPTION.items():
         help_text += f"{k}: {v}\n"
+    help_text += "\nВАЖНО: Для получения данных по параметру filter (например, \"managers\", \"donut\", \"friends\")\n"
+    help_text += "требуется админский access_token — токен владельца или администратора сообщества.\n"
+    help_text += "Иначе VK API выдаст ошибку доступа и не покажет нужный список.\n"
+    return help_text
+
+
+def parameters_help():
+    help_text = "Параметры получения участников группы:\n"
+    help_text += "=" * 50 + "\n"
+    help_text += "count: Сколько участников получить (1–1000). По умолчанию 1000.\n"
+    help_text += "offset: Смещение, необходимое для выборки определённого подмножества участников.\n"
+    help_text += "        Например, если offset=1000 и count=1000, то будут получены участники с 1001 по 2000.\n"
+    help_text += "        По умолчанию 0.\n"
+    help_text += "sort: Сортировка результатов:\n"
+    help_text += "      \"id_asc\" — по возрастанию ID (по умолчанию)\n"
+    help_text += "      \"id_desc\" — по убыванию ID\n"
+    help_text += "      \"time_asc\"/\"time_desc\" — по времени вступления \n"
+    help_text += "      (требуется токен модератора)\n"
+    help_text += "fields: Дополнительные поля профилей участников через запятую.\n"
+    help_text += "        Например: \"city,sex,bdate\". По умолчанию пусто.\n"
+    help_text += "filter: Фильтр по составу участников:\n"
+    help_text += "        \"friends\" — только друзья\n"
+    help_text += "        \"managers\" — руководители сообщества\n"
+    help_text += "        \"donut\" — VK Donut подписчики\n"
+    help_text += "        и др. (см. справку по фильтрам)\n"
+    help_text += "\nПример использования смещения:\n"
+    help_text += "Запрос 1: offset=0, count=1000 → участники 1-1000\n"
+    help_text += "Запрос 2: offset=1000, count=1000 → участники 1001-2000\n"
+    help_text += "Запрос 3: offset=2000, count=1000 → участники 2001-3000\n"
     return help_text
 
 
@@ -466,7 +497,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("VK Group Parser")
-        self.setGeometry(100, 100, 700, 600)
+        self.setGeometry(100, 100, 700, 650)
         
         # Create central widget and layout
         central_widget = QWidget()
@@ -489,6 +520,15 @@ class MainWindow(QMainWindow):
         # Create input group
         self.input_group = QGroupBox("Параметры парсинга")
         self.input_layout = QVBoxLayout()
+        
+        # Token instructions
+        token_instructions = QLabel("Для работы программы необходим токен VK:\n" +
+                                   "1. Создайте Standalone-приложение: https://vk.com/apps?act=manage\n" +
+                                   "2. Получите токен для работы\n" +
+                                   "3. Если у группы нет числового ID, получите его тут: https://regvk.com/id")
+        token_instructions.setWordWrap(True)
+        token_instructions.setStyleSheet("color: gray; font-size: 9pt;")
+        self.input_layout.addWidget(token_instructions)
         
         # Token input
         token_layout = QHBoxLayout()
@@ -526,6 +566,15 @@ class MainWindow(QMainWindow):
         self.members_group = QGroupBox("Параметры получения участников")
         self.members_layout = QVBoxLayout()
         
+        # Members instructions
+        members_instructions = QLabel("Для получения участников группы:\n" +
+                                     "1. Введите ID группы (число)\n" +
+                                     "2. Укажите количество участников (1-1000)\n" +
+                                     "3. При необходимости укажите дополнительные параметры")
+        members_instructions.setWordWrap(True)
+        members_instructions.setStyleSheet("color: gray; font-size: 9pt;")
+        self.members_layout.addWidget(members_instructions)
+        
         # Group ID input (for members)
         group_id_layout = QHBoxLayout()
         group_id_layout.addWidget(QLabel("ID группы:"))
@@ -535,14 +584,14 @@ class MainWindow(QMainWindow):
         
         # Members count input
         members_count_layout = QHBoxLayout()
-        members_count_layout.addWidget(QLabel("Количество участников:"))
+        members_count_layout.addWidget(QLabel("Количество участников (1-1000):"))
         self.members_count_input = QLineEdit("1000")
         members_count_layout.addWidget(self.members_count_input)
         self.members_layout.addLayout(members_count_layout)
         
         # Offset input
         offset_layout = QHBoxLayout()
-        offset_layout.addWidget(QLabel("Смещение:"))
+        offset_layout.addWidget(QLabel("Смещение (offset):"))
         self.offset_input = QLineEdit("0")
         offset_layout.addWidget(self.offset_input)
         self.members_layout.addLayout(offset_layout)
@@ -570,10 +619,13 @@ class MainWindow(QMainWindow):
         
         # Help buttons
         help_layout = QHBoxLayout()
+        self.parameters_help_button = QPushButton("Справка по параметрам")
+        self.parameters_help_button.clicked.connect(self.show_parameters_help)
         self.fields_help_button = QPushButton("Справка по полям")
         self.fields_help_button.clicked.connect(self.show_fields_help)
         self.filters_help_button = QPushButton("Справка по фильтрам")
         self.filters_help_button.clicked.connect(self.show_filters_help)
+        help_layout.addWidget(self.parameters_help_button)
         help_layout.addWidget(self.fields_help_button)
         help_layout.addWidget(self.filters_help_button)
         self.members_layout.addLayout(help_layout)
@@ -609,7 +661,7 @@ class MainWindow(QMainWindow):
         # Create contact button
         contact_layout = QHBoxLayout()
         contact_layout.addStretch()
-        self.contact_button = QPushButton("Связь с разработчиком: https://t.me/Userspoi")
+        self.contact_button = QPushButton("Связаться")
         self.contact_button.clicked.connect(self.open_contact)
         contact_layout.addWidget(self.contact_button)
         main_layout.addLayout(contact_layout)
@@ -621,11 +673,17 @@ class MainWindow(QMainWindow):
         self.parse_mode_radio.toggled.connect(self.on_mode_changed)
         self.members_mode_radio.toggled.connect(self.on_mode_changed)
         
-        # Set example values
+        # Set example values (without actual token for security)
         self.domain_input.setText("ddx_fitness")
         self.owner_input.setText("-164992662")
-        self.token_input.setText("e5381dcde5381dcde5381dcd27e60409cfee538e5381dcd8dc6434edf86e231157f87ee")
+        self.token_input.setPlaceholderText("Введите ваш токен VK")
         self.group_id_input.setText("191570013")
+        self.group_id_input.setToolTip("ID группы VK (число, например: 191570013)")
+        self.members_count_input.setToolTip("Количество участников за один запрос (1-1000)")
+        self.offset_input.setToolTip("Смещение для получения следующих участников")
+        self.sort_input.setToolTip("Сортировка: id_asc, id_desc, time_asc, time_desc")
+        self.fields_input.setToolTip("Доп. поля через запятую: city,sex,bdate и др.")
+        self.filter_input.setToolTip("Фильтр: friends, managers, donut и др. (требуется админ токен)")
         
     def on_mode_changed(self):
         if self.parse_mode_radio.isChecked():
@@ -634,6 +692,10 @@ class MainWindow(QMainWindow):
         else:
             self.input_group.setVisible(False)
             self.members_group.setVisible(True)
+        
+    def show_parameters_help(self):
+        help_text = parameters_help()
+        QMessageBox.information(self, "Справка по параметрам", help_text)
         
     def show_fields_help(self):
         help_text = fields_help()
@@ -716,10 +778,10 @@ class MainWindow(QMainWindow):
             
         try:
             count = int(count)
-            if count <= 0:
-                raise ValueError("Count must be positive")
+            if count <= 0 or count > 1000:
+                raise ValueError("Count must be between 1 and 1000")
         except ValueError:
-            QMessageBox.warning(self, "Ошибка", "Количество участников должно быть положительным числом")
+            QMessageBox.warning(self, "Ошибка", "Количество участников должно быть числом от 1 до 1000")
             return
             
         try:
